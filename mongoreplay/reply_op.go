@@ -98,6 +98,8 @@ func (op *ReplyOp) FromReader(r io.Reader) error {
 		}
 		op.Docs = append(op.Docs, nextDoc)
 	}
+	toolDebugLogger.Logvf(Always, "Docs %v",op.Docs)
+
 
 	return nil
 }

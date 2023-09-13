@@ -107,7 +107,6 @@ type getLastError struct {
 	CmdName  int         "getLastError,omitempty"
 	W        interface{} "w,omitempty"
 	WTimeout int         "wtimeout,omitempty"
-	FSync    bool        "fsync,omitempty"
 	J        bool        "j,omitempty"
 }
 
@@ -1811,7 +1810,7 @@ func (s *Session) Safe() (safe *Safe) {
 	defer s.m.Unlock()
 	if s.safeOp != nil {
 		cmd := s.safeOp.Query.(*getLastError)
-		safe = &Safe{WTimeout: cmd.WTimeout, FSync: cmd.FSync, J: cmd.J}
+		safe = &Safe{WTimeout: cmd.WTimeout, J: cmd.J}
 		switch w := cmd.W.(type) {
 		case string:
 			safe.WMode = w
@@ -1946,7 +1945,7 @@ func (s *Session) ensureSafe(safe *Safe) {
 
 	var cmd getLastError
 	if s.safeOp == nil {
-		cmd = getLastError{1, w, safe.WTimeout, safe.FSync, safe.J}
+		cmd = getLastError{1, w, safe.WTimeout, safe.J}
 	} else {
 		// Copy.  We don't want to mutate the existing query.
 		cmd = *(s.safeOp.Query.(*getLastError))
@@ -1960,10 +1959,7 @@ func (s *Session) ensureSafe(safe *Safe) {
 		if safe.WTimeout > 0 && safe.WTimeout < cmd.WTimeout {
 			cmd.WTimeout = safe.WTimeout
 		}
-		if safe.FSync {
-			cmd.FSync = true
-			cmd.J = false
-		} else if safe.J && !cmd.FSync {
+		if safe.J {
 			cmd.J = true
 		}
 	}
@@ -4349,6 +4345,7 @@ func (c *Collection) writeOp(op interface{}, ordered bool) (lerr *LastError, err
 		return nil, err
 	}
 	defer socket.Release()
+    debugf("WriteOp Aaron")
 
 	s.m.RLock()
 	safeOp := s.safeOp
@@ -4420,6 +4417,7 @@ func (c *Collection) writeOp(op interface{}, ordered bool) (lerr *LastError, err
 }
 
 func (c *Collection) writeOpQuery(socket *MongoSocket, safeOp *QueryOp, op interface{}, ordered bool) (lerr *LastError, err error) {
+    debugf("Write Op Query Aaron")
 	if safeOp == nil {
 		return nil, socket.Query(op)
 	}
@@ -4469,6 +4467,7 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 	} else {
 		writeConcern = safeOp.Query.(*getLastError)
 	}
+    debugf("writeConcern is %#v", writeConcern)
 
 	var cmd bson.D
 	switch op := op.(type) {
@@ -4477,7 +4476,6 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 		cmd = bson.D{
 			{"insert", c.Name},
 			{"documents", op.Documents},
-			{"writeConcern", writeConcern},
 			{"ordered", op.Flags&1 == 0},
 		}
 	case *UpdateOp:
@@ -4485,7 +4483,6 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 		cmd = bson.D{
 			{"update", c.Name},
 			{"updates", []interface{}{op}},
-			{"writeConcern", writeConcern},
 			{"ordered", ordered},
 		}
 	case bulkUpdateOp:
@@ -4493,7 +4490,6 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 		cmd = bson.D{
 			{"update", c.Name},
 			{"updates", op},
-			{"writeConcern", writeConcern},
 			{"ordered", ordered},
 		}
 	case *DeleteOp:
@@ -4501,7 +4497,6 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 		cmd = bson.D{
 			{"delete", c.Name},
 			{"deletes", []interface{}{op}},
-			{"writeConcern", writeConcern},
 			{"ordered", ordered},
 		}
 	case bulkDeleteOp:
@@ -4509,7 +4504,6 @@ func (c *Collection) writeOpCommand(socket *MongoSocket, safeOp *QueryOp, op int
 		cmd = bson.D{
 			{"delete", c.Name},
 			{"deletes", op},
-			{"writeConcern", writeConcern},
 			{"ordered", ordered},
 		}
 	}

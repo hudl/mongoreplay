@@ -10,6 +10,7 @@
 package mgo
 
 import (
+    aarondebug "runtime/debug"
 	"bytes"
 	"errors"
 	"fmt"
@@ -531,7 +532,8 @@ func (socket *MongoSocket) Query(ops ...interface{}) (err error) {
 	requestCount := 0
 
 	for _, op := range ops {
-		debugf("Socket %p to %s: serializing op: %#v", socket, socket.addr, op)
+		debugf("AARON Socket %p to %s: serializing op: %#v", socket, socket.addr, op)
+        aarondebug.PrintStack()
 		start := len(buf)
 		var replyFunc replyFunc
 		switch op := op.(type) {
@@ -565,12 +567,14 @@ func (socket *MongoSocket) Query(ops ...interface{}) (err error) {
 			}
 
 		case *QueryOp:
+            debugf("QUERY OP AARON %v", dbQuery)
 			buf = addHeader(buf, dbQuery)
 			buf = addInt32(buf, int32(op.Flags))
 			buf = addCString(buf, op.Collection)
 			buf = addInt32(buf, op.Skip)
 			buf = addInt32(buf, op.Limit)
 			buf, err = addBSON(buf, op.finalQuery(socket))
+            debugf("FINAL QUERY %v", buf)
 			if err != nil {
 				return err
 			}
@@ -636,6 +640,7 @@ func (socket *MongoSocket) Query(ops ...interface{}) (err error) {
 			}
 			replyFunc = op.replyFunc
 		case *CommandReplyOp:
+            debugf("ReplyOpsComand")
 			buf = addHeader(buf, dbCommandReply)
 			buf, err = addBSON(buf, op.CommandReply)
 			if err != nil {

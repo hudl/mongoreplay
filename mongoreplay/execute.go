@@ -227,6 +227,7 @@ func (context *ExecutionContext) newExecutionConnection(start time.Time, connect
 
 // Execute plays a particular command on an mgo socket.
 func (context *ExecutionContext) Execute(op *RecordedOp, socket *mgo.MongoSocket) (Op, Replyable, error) {
+    toolDebugLogger.Logvf(Always, "AARON DEBUG LOG: %v", op.RawOp)
 	opToExec, err := op.RawOp.Parse()
 	var reply Replyable
 
