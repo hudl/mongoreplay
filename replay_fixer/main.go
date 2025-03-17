@@ -118,6 +118,7 @@ func main() {
 
 		// Some commands don't have a "$query" wrapper (like updates), so just skip 'em.
 		if qMap.Query == nil {
+			bsonToWriter(playbackWriter, op)
 			continue
 		}
 
