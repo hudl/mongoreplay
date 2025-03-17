@@ -37,7 +37,6 @@ type ConnString struct {
 	Connect                 ConnectMode
 	ConnectTimeout          time.Duration
 	Database                string
-	FSync                   bool
 	HeartbeatInterval       time.Duration
 	Hosts                   []string
 	Journal                 bool
@@ -346,12 +345,6 @@ func (p *parser) addOption(pair string) error {
 			return fmt.Errorf("invalid value for %s: %s", key, value)
 		}
 		p.HeartbeatInterval = time.Duration(n) * time.Millisecond
-	case "fsync":
-		f, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("invalid value for %s: %s", key, value)
-		}
-		p.FSync = f
 	case "j":
 		j, err := strconv.ParseBool(value)
 		if err != nil {
