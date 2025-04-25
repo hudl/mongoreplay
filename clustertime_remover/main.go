@@ -36,6 +36,10 @@ func addHeader(b []byte, opcode int) []byte {
 	return b
 }
 
+func addUint32(b []byte, i uint32) []byte {
+	return append(b, byte(i), byte(i>>8), byte(i>>16), byte(i>>24))
+}
+
 func addInt32(b []byte, i int32) []byte {
 	return append(b, byte(i), byte(i>>8), byte(i>>16), byte(i>>24))
 }
@@ -85,7 +89,14 @@ func main() {
 
 	opCh, _ := reader.OpChan(1)
 
+	// opCount := 1
 	for op := range opCh {
+		// if opCount != 3 {
+		// 	opCount++
+		// 	continue
+		// } else {
+		// 	opCount++
+		// }
 
 		//
 		if op.OpCode() != mongoreplay.OpCodeMessage {
@@ -95,7 +106,7 @@ func main() {
 
 		rOp, err := op.Parse()
 		if err != nil {
-			panic(err)
+			panic(fmt.Errorf("failed to parse: %w", err))
 		}
 
 		mOp, ok := rOp.(*mongoreplay.MsgOp)
@@ -104,14 +115,14 @@ func main() {
 		}
 
 		// Replacement sections
-		newSections := make([]mgo.MsgSection, 0, len(mOp.Sections))
+		// newSections := make([]mgo.MsgSection, 0, len(mOp.Sections))
 
 		// A message op has a list of sections- https://www.mongodb.com/docs/manual/reference/mongodb-wire-protocol/#std-label-wire-msg-sections
-		for section := range mOp.Sections {
-			sectionData := mOp.Sections[section]
-			if sectionData.PayloadType == mgo.MsgPayload0 {
+		for i := range mOp.Sections {
+			section := mOp.Sections[i]
+			if section.PayloadType == mgo.MsgPayload0 {
 				// This is a BSON Objet according to the spec
-				mR, ok := sectionData.Data.(*bson.Raw)
+				mR, ok := section.Data.(*bson.Raw)
 				if !ok {
 					panic("not *bson.Raw")
 				}
@@ -120,40 +131,71 @@ func main() {
 				if err := mR.Unmarshal(&bsonDoc); err != nil {
 					panic(fmt.Sprintf("unmarshalling into bsonDoc: %v", err))
 				}
-				fmt.Printf("Original BSON:\n%s\n", bsonDoc)
 				delete(bsonDoc, "$clusterTime")
-				fmt.Printf("Modified BSON:\n%s\n", bsonDoc)
-				newSections = append(newSections, mgo.MsgSection{
-					PayloadType: sectionData.PayloadType,
-					Data:        bsonDoc,
-				})
-
+				mOp.Sections[i].Data = bsonDoc
 			}
 		}
 		// Now we have modified the bsonDoc, we need to write it back to the op
 
-		fmt.Printf("Header: %s\n", mOp.Header)
+		fmt.Printf("Header: %#v\n", mOp.Header)
 		fmt.Printf("FlagBits: %d\n", mOp.Flags)
-		fmt.Printf("Sections: %d\n", mOp.Sections[0].Data)
+		fmt.Printf("Sections: %#v\n", mOp.Sections)
 		fmt.Printf("Checksum: %d\n", mOp.Checksum)
 
-		mBytes, err := bson.Marshal(mOp.MsgOp)
-		if err != nil {
-			panic(err)
-		}
-
-		msgLen := len(mOp.Header.ToWire()) + len(mBytes)
-		mOp.Header.MessageLength = int32(msgLen)
-
 		buf := make([]byte, 0, 256)
-		buf = addHeader(buf, 2004)
-		buf = addInt32(buf, int32(mOp.Flags))
-		buf, err = addBSON(buf, newSections)
-		if err != nil {
-			panic(err)
+		buf = addHeader(buf, 2013)
+		buf = addUint32(buf, mOp.Flags)
+		for i := range mOp.Sections {
+			buf = append(buf, byte(mOp.Sections[i].PayloadType))
+			switch mOp.Sections[i].PayloadType {
+			case mgo.MsgPayload0:
+				buf, err = addBSON(buf, mOp.Sections[i].Data)
+				if err != nil {
+					panic(err)
+				}
+
+			case mgo.MsgPayload1:
+				payload := mOp.Sections[i].Data.(mgo.PayloadType1)
+				// buf, err = addBSON(buf, payload)
+				// if !ok {
+				// 	panic(fmt.Errorf("Can't addBSON: %w", err))
+				// }
+				addInt32(buf, payload.Size)
+				addCString(buf, payload.Identifier)
+				for dI := range payload.Docs {
+					outer, ok := payload.Docs[dI].(bson.Raw)
+					if !ok {
+						panic("aint a bson.Raw")
+					}
+
+					var inner bson.M
+					bson.Unmarshal(outer.Data, &inner)
+
+					addBSON(buf, inner)
+
+					// var doc bson.M
+					// err := rawDoc.Unmarshal(&doc)
+					// if err != nil {
+					// 	panic("Can't unmarshal")
+					// }
+
+					// fmt.Println(doc)
+
+					// // out, err := bson.Marshal(rawDoc)
+					// // if err != nil {
+					// // 	panic("Can't marshal")
+					// // }
+					// // fmt.Printf("MARHSL OUT: %x\n", out)
+					// buf, err = addBSON(buf, doc)
+					// if err != nil {
+					// 	panic(err)
+					// }
+				}
+			}
 		}
 		// Set new message length
 		setInt32(buf, 0, int32(len(buf)))
+		mOp.Header.MessageLength = int32(len(buf))
 
 		op.RawOp = mongoreplay.RawOp{
 			Header: mOp.Header,
@@ -162,6 +204,5 @@ func main() {
 
 		bsonToWriter(playbackWriter, op)
 
-		break
 	}
 }
