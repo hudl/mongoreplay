@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
 	"io"
 	"time"
 
@@ -166,7 +165,6 @@ func (op *MsgOp) Execute(socket *mgo.MongoSocket) (Replyable, error) {
 		offset += length
 		msgOp.Sections = append(msgOp.Sections, section)
 		docs, err := getCursorDocsFromMsgSection(section)
-
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +200,8 @@ func (msgOp *MsgOpReply) getCursorID() (int64, error) {
 
 // Meta returns metadata about the operation, useful for analysis of traffic.
 func (msgOp *MsgOp) Meta() OpMetadata {
-	return OpMetadata{"op_msg",
+	return OpMetadata{
+		"op_msg",
 		msgOp.Database,
 		msgOp.CommandName,
 		map[string]interface{}{
@@ -214,6 +213,7 @@ func (msgOp *MsgOp) Meta() OpMetadata {
 func (msgOp *MsgOpReply) getLatencyMicros() int64 {
 	return int64(msgOp.Latency / (time.Microsecond))
 }
+
 func (msgOp *MsgOpReply) getNumReturned() int {
 	return len(msgOp.Docs)
 }
@@ -409,7 +409,7 @@ func readPayloadType1(r io.Reader) (mgo.PayloadType1, int, error) {
 	payload.Size = getInt32(buf[:], 0)
 	offset += 4
 
-	//Read the identifier
+	// Read the identifier
 	identifier, err := readCStringFromReader(r)
 	if err != nil {
 		return payload, 0, err
@@ -417,7 +417,7 @@ func readPayloadType1(r io.Reader) (mgo.PayloadType1, int, error) {
 	payload.Identifier = string(identifier)
 	offset += len([]byte(identifier)) + 1
 
-	//read all the present documents
+	// read all the present documents
 	docs := []interface{}{}
 	for payload.Size-int32(offset) > 0 {
 		docAsSlice, err := ReadDocument(r)

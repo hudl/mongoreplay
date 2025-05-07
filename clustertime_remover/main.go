@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	mgo "github.com/mongodb-labs/mongoreplay/internal/llmgo"
 	"github.com/mongodb-labs/mongoreplay/internal/llmgo/bson"
@@ -11,6 +12,22 @@ import (
 )
 
 // Most of the following functions are just copied from private functions in mongoreplay.
+
+// bsonFromReader reads a bson document from the reader into out.
+func bsonFromReader(reader io.Reader, out interface{}) error {
+	buf, err := mongoreplay.ReadDocument(reader)
+	if err != nil {
+		if err != io.EOF {
+			err = fmt.Errorf("ReadDocument Error: %v", err)
+		}
+		return err
+	}
+	err = bson.Unmarshal(buf, out)
+	if err != nil {
+		return fmt.Errorf("unmarshal recordedOp error: %v", err)
+	}
+	return nil
+}
 
 // bsonToWriter writes a bson document to the writer given.
 func bsonToWriter(writer io.Writer, in interface{}) error {
@@ -74,135 +91,165 @@ func setInt32(b []byte, pos int, i int32) {
 }
 
 func main() {
-	reader, err := mongoreplay.NewPlaybackFileReader(os.Args[1], false)
+	origFile, err := os.Open(os.Args[1])
 	if err != nil {
-		fmt.Println("newplaybackfilereader error")
+		fmt.Println("origFile open error")
 		panic(err)
 	}
 
-	if reader == nil {
-		panic("nil reader")
+	defer origFile.Close()
+
+	fixedFile, err := os.Create(os.Args[2])
+	if err != nil {
+		fmt.Println("fixedFile reate error")
+		panic(err)
+	}
+	defer fixedFile.Close()
+
+	metadata := new(mongoreplay.PlaybackFileMetadata)
+	err = bsonFromReader(origFile, metadata)
+	if err != nil {
+		panic(fmt.Errorf("bson read error: %v", err))
 	}
 
-	playbackWriter, _ := mongoreplay.NewPlaybackFileWriter(os.Args[2], false, false)
-	defer playbackWriter.Close()
+	bsonToWriter(fixedFile, metadata)
 
-	opCh, _ := reader.OpChan(1)
+	var opCount int
+	var modifiedCount int
+	var compressedCount int
 
-	// opCount := 1
-	for op := range opCh {
-		// if opCount != 3 {
-		// 	opCount++
-		// 	continue
-		// } else {
-		// 	opCount++
-		// }
+	for {
+		opCount++
+		op := new(mongoreplay.RecordedOp)
+		err = bsonFromReader(origFile, op)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			panic(fmt.Errorf("bson read error: %v", err))
+		}
 
-		//
-		if op.OpCode() != mongoreplay.OpCodeMessage {
-			bsonToWriter(playbackWriter, op)
+		compressed := op.OpCode() == mongoreplay.OpCodeCompressed
+		if compressed {
+			compressedCount++
+		}
+		rawOp, err := op.Parse()
+		if err != nil {
+			fmt.Println(opCount)
+			panic(fmt.Errorf("parsing op: %v", err))
+		}
+		if rawOp.OpCode() != mongoreplay.OpCodeMessage {
+			bsonToWriter(fixedFile, op)
 			continue
 		}
 
-		rOp, err := op.Parse()
-		if err != nil {
-			panic(fmt.Errorf("failed to parse: %w", err))
-		}
-
-		mOp, ok := rOp.(*mongoreplay.MsgOp)
+		msgOp, ok := rawOp.(*mongoreplay.MsgOp)
 		if !ok {
-			panic("not query op")
+			// Happens with things like MsgOpGetMore
+			bsonToWriter(fixedFile, op)
+			continue
 		}
-
-		// Replacement sections
-		// newSections := make([]mgo.MsgSection, 0, len(mOp.Sections))
-
-		// A message op has a list of sections- https://www.mongodb.com/docs/manual/reference/mongodb-wire-protocol/#std-label-wire-msg-sections
-		for i := range mOp.Sections {
-			section := mOp.Sections[i]
-			if section.PayloadType == mgo.MsgPayload0 {
-				// This is a BSON Objet according to the spec
-				mR, ok := section.Data.(*bson.Raw)
-				if !ok {
-					panic("not *bson.Raw")
-				}
-
-				var bsonDoc bson.M
-				if err := mR.Unmarshal(&bsonDoc); err != nil {
-					panic(fmt.Sprintf("unmarshalling into bsonDoc: %v", err))
-				}
-				delete(bsonDoc, "$clusterTime")
-				mOp.Sections[i].Data = bsonDoc
-			}
-		}
-		// Now we have modified the bsonDoc, we need to write it back to the op
-
-		fmt.Printf("Header: %#v\n", mOp.Header)
-		fmt.Printf("FlagBits: %d\n", mOp.Flags)
-		fmt.Printf("Sections: %#v\n", mOp.Sections)
-		fmt.Printf("Checksum: %d\n", mOp.Checksum)
 
 		buf := make([]byte, 0, 256)
 		buf = addHeader(buf, 2013)
-		buf = addUint32(buf, mOp.Flags)
-		for i := range mOp.Sections {
-			buf = append(buf, byte(mOp.Sections[i].PayloadType))
-			switch mOp.Sections[i].PayloadType {
+		buf = addInt32(buf, int32(msgOp.Flags))
+
+		for i := range msgOp.Sections {
+			switch msgOp.Sections[i].PayloadType {
 			case mgo.MsgPayload0:
-				buf, err = addBSON(buf, mOp.Sections[i].Data)
-				if err != nil {
-					panic(err)
+				buf = append(buf, byte(0))
+
+				secRaw, ok := msgOp.Sections[i].Data.(*bson.Raw)
+				if !ok {
+					panic("Not *bson.Raw")
 				}
 
+				var secBSON bson.D
+				if err := secRaw.Unmarshal(&secBSON); err != nil {
+					panic(fmt.Errorf("unmarshalling section bson: %v", err))
+				}
+				secBSON = slices.DeleteFunc(secBSON, func(e bson.DocElem) bool {
+					if e.Name == "$clusterTime" {
+						modifiedCount++
+						return true
+					}
+					return false
+				})
+
+				marshalled, err := bson.Marshal(secBSON)
+				if marshalled[len(marshalled)-1] != 0x00 {
+					panic("P0: doesn't end in null byte")
+				}
+				if err != nil {
+					panic(fmt.Errorf("marshalling section bson: %v", err))
+				}
+				buf = append(buf, marshalled...)
 			case mgo.MsgPayload1:
-				payload := mOp.Sections[i].Data.(mgo.PayloadType1)
-				// buf, err = addBSON(buf, payload)
-				// if !ok {
-				// 	panic(fmt.Errorf("Can't addBSON: %w", err))
-				// }
-				addInt32(buf, payload.Size)
-				addCString(buf, payload.Identifier)
-				for dI := range payload.Docs {
-					outer, ok := payload.Docs[dI].(bson.Raw)
+				buf = append(buf, byte(1))
+				payload, ok := msgOp.Sections[i].Data.(mgo.PayloadType1)
+				if !ok {
+					panic("incorrect type given for payload")
+				}
+
+				// Write out the size
+				currentOffset := len(buf)
+				// set temp size
+				buf = addInt32(buf, 0)
+
+				// Write out the identifier
+				buf = addCString(buf, payload.Identifier)
+
+				payloadSize := 0
+				// Write out the docs
+				for _, d := range payload.Docs {
+					docRaw, ok := d.(bson.Raw)
 					if !ok {
-						panic("aint a bson.Raw")
+						panic("Not *bson.Raw")
 					}
 
-					var inner bson.M
-					bson.Unmarshal(outer.Data, &inner)
+					var docBSON bson.D
+					if err := docRaw.Unmarshal(&docBSON); err != nil {
+						panic(fmt.Errorf("unmarshalling section bson: %v", err))
+					}
+					docBSON = slices.DeleteFunc(docBSON, func(e bson.DocElem) bool {
+						if e.Name == "$clusterTime" {
+							modifiedCount++
+							return true
+						}
+						return false
+					})
 
-					addBSON(buf, inner)
-
-					// var doc bson.M
-					// err := rawDoc.Unmarshal(&doc)
-					// if err != nil {
-					// 	panic("Can't unmarshal")
-					// }
-
-					// fmt.Println(doc)
-
-					// // out, err := bson.Marshal(rawDoc)
-					// // if err != nil {
-					// // 	panic("Can't marshal")
-					// // }
-					// // fmt.Printf("MARHSL OUT: %x\n", out)
-					// buf, err = addBSON(buf, doc)
-					// if err != nil {
-					// 	panic(err)
-					// }
+					marshalled, err := bson.Marshal(docBSON)
+					if err != nil {
+						panic(fmt.Errorf("marshalling section bson: %v", err))
+					}
+					buf = append(buf, marshalled...)
+					if marshalled[len(marshalled)-1] != 0x00 {
+						panic("P1: doesn't end in null byte")
+					}
+					payloadSize += len(marshalled)
 				}
+
+				// Overwrite correct size
+				setInt32(buf, currentOffset, int32(4+len(payload.Identifier)+1+payloadSize))
 			}
 		}
-		// Set new message length
+
 		setInt32(buf, 0, int32(len(buf)))
-		mOp.Header.MessageLength = int32(len(buf))
+		op.Header.MessageLength = int32(len(buf))
 
-		op.RawOp = mongoreplay.RawOp{
-			Header: mOp.Header,
-			Body:   buf,
-		}
+		// if compressed {
+		// 	buf, err = mgo.CompressMessage(buf)
+		// 	if err != nil {
+		// 		panic(fmt.Errorf("recompressing message: %v", err))
+		// 	}
+		// }
+		op.Body = buf
 
-		bsonToWriter(playbackWriter, op)
-
+		bsonToWriter(fixedFile, op)
 	}
+
+	fmt.Println("Total Ops: ", opCount)
+	fmt.Println("Modified: ", modifiedCount)
+	fmt.Println("Compressed: ", compressedCount)
 }

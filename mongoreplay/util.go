@@ -21,10 +21,8 @@ import (
 	"github.com/mongodb-labs/mongoreplay/internal/llmgo/bson"
 )
 
-var (
-	// ErrInvalidSize means the size of the BSON document is invalid
-	ErrInvalidSize = errors.New("got invalid document size")
-)
+// ErrInvalidSize means the size of the BSON document is invalid
+var ErrInvalidSize = errors.New("got invalid document size")
 
 const (
 	maximumDocumentSize = 49 * 1024 * 1024 // there is a 48MB max message size
@@ -436,8 +434,8 @@ func ConvertBSONValueToJSON(x interface{}) (interface{}, error) {
 	case mgo.DBRef: // DBRef
 		return map[string]interface{}{"$ref": v.Collection, "$id": v.Id}, nil
 
-	//case bson.DBPointer: // DBPointer
-	//return json.DBPointer{v.Namespace, v.Id}, nil
+	// case bson.DBPointer: // DBPointer
+	// return json.DBPointer{v.Namespace, v.Id}, nil
 
 	case bson.RegEx: // RegExp
 		return json.RegExp{v.Pattern, v.Options}, nil
@@ -533,7 +531,6 @@ func (b *PreciseTime) GetBSON() (interface{}, error) {
 		Nsec: int32(b.Nanosecond()),
 	}
 	return &result, nil
-
 }
 
 // SetBSON decodes the BSON into a time
