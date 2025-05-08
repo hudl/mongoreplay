@@ -13,6 +13,16 @@ import (
 
 // Most of the following functions are just copied from private functions in mongoreplay.
 
+func recompressOp(op *mongoreplay.RecordedOp) {
+	buf, err := mgo.CompressMessage(op.Body)
+	if err != nil {
+		panic(fmt.Errorf("recompressing message: %v", err))
+	}
+	setInt32(buf, 0, int32(len(buf)))
+	op.Header.MessageLength = int32(len(buf))
+	op.Header.OpCode = mongoreplay.OpCodeCompressed
+}
+
 // bsonFromReader reads a bson document from the reader into out.
 func bsonFromReader(reader io.Reader, out interface{}) error {
 	buf, err := mongoreplay.ReadDocument(reader)
@@ -27,6 +37,13 @@ func bsonFromReader(reader io.Reader, out interface{}) error {
 		return fmt.Errorf("unmarshal recordedOp error: %v", err)
 	}
 	return nil
+}
+
+func getInt32(b []byte, pos int) int32 {
+	return (int32(b[pos+0])) |
+		(int32(b[pos+1]) << 8) |
+		(int32(b[pos+2]) << 16) |
+		(int32(b[pos+3]) << 24)
 }
 
 // bsonToWriter writes a bson document to the writer given.
@@ -117,6 +134,7 @@ func main() {
 	var opCount int
 	var modifiedCount int
 	var compressedCount int
+	var compressedModifiedCount int
 
 	for {
 		opCount++
@@ -132,13 +150,36 @@ func main() {
 		compressed := op.OpCode() == mongoreplay.OpCodeCompressed
 		if compressed {
 			compressedCount++
+
+			// op.Parse() overwrites the underlying header and body to no longer
+			// be compressed if it currently is. Ops for which we don't care about
+			// we should write them back out before calling op.Parse() to keep them compressed.
+
+			// Extract the original opcode. Pos 16 clears the msgHeader.
+			origOpcode := mongoreplay.OpCode(getInt32(op.Body, 16))
+			if origOpcode != mongoreplay.OpCodeMessage {
+				bsonToWriter(fixedFile, op)
+				continue
+			}
 		}
+
 		rawOp, err := op.Parse()
 		if err != nil {
 			fmt.Println(opCount)
 			panic(fmt.Errorf("parsing op: %v", err))
 		}
+
+		if rawOp == nil {
+			if compressed {
+				recompressOp(op)
+			}
+			bsonToWriter(fixedFile, op)
+			continue
+		}
 		if rawOp.OpCode() != mongoreplay.OpCodeMessage {
+			if compressed {
+				recompressOp(op)
+			}
 			bsonToWriter(fixedFile, op)
 			continue
 		}
@@ -146,6 +187,10 @@ func main() {
 		msgOp, ok := rawOp.(*mongoreplay.MsgOp)
 		if !ok {
 			// Happens with things like MsgOpGetMore
+
+			if compressed {
+				recompressOp(op)
+			}
 			bsonToWriter(fixedFile, op)
 			continue
 		}
@@ -154,10 +199,11 @@ func main() {
 		buf = addHeader(buf, 2013)
 		buf = addInt32(buf, int32(msgOp.Flags))
 
+		var modified bool
 		for i := range msgOp.Sections {
 			switch msgOp.Sections[i].PayloadType {
 			case mgo.MsgPayload0:
-				buf = append(buf, byte(0))
+				buf = append(buf, mgo.MsgPayload0)
 
 				secRaw, ok := msgOp.Sections[i].Data.(*bson.Raw)
 				if !ok {
@@ -171,6 +217,10 @@ func main() {
 				secBSON = slices.DeleteFunc(secBSON, func(e bson.DocElem) bool {
 					if e.Name == "$clusterTime" {
 						modifiedCount++
+						modified = true
+						if compressed {
+							compressedModifiedCount++
+						}
 						return true
 					}
 					return false
@@ -185,7 +235,7 @@ func main() {
 				}
 				buf = append(buf, marshalled...)
 			case mgo.MsgPayload1:
-				buf = append(buf, byte(1))
+				buf = append(buf, mgo.MsgPayload1)
 				payload, ok := msgOp.Sections[i].Data.(mgo.PayloadType1)
 				if !ok {
 					panic("incorrect type given for payload")
@@ -213,7 +263,11 @@ func main() {
 					}
 					docBSON = slices.DeleteFunc(docBSON, func(e bson.DocElem) bool {
 						if e.Name == "$clusterTime" {
+							modified = true
 							modifiedCount++
+							if compressed {
+								compressedModifiedCount++
+							}
 							return true
 						}
 						return false
@@ -235,15 +289,26 @@ func main() {
 			}
 		}
 
+		if !modified {
+			if compressed {
+				recompressOp(op)
+			}
+			bsonToWriter(fixedFile, op)
+			continue
+		}
+
 		setInt32(buf, 0, int32(len(buf)))
 		op.Header.MessageLength = int32(len(buf))
 
-		// if compressed {
-		// 	buf, err = mgo.CompressMessage(buf)
-		// 	if err != nil {
-		// 		panic(fmt.Errorf("recompressing message: %v", err))
-		// 	}
-		// }
+		if compressed {
+			buf, err = mgo.CompressMessage(buf)
+			if err != nil {
+				panic(fmt.Errorf("recompressing message: %v", err))
+			}
+			setInt32(buf, 0, int32(len(buf)))
+			op.Header.MessageLength = int32(len(buf))
+			op.Header.OpCode = mongoreplay.OpCodeCompressed
+		}
 		op.Body = buf
 
 		bsonToWriter(fixedFile, op)
@@ -252,4 +317,5 @@ func main() {
 	fmt.Println("Total Ops: ", opCount)
 	fmt.Println("Modified: ", modifiedCount)
 	fmt.Println("Compressed: ", compressedCount)
+	fmt.Println("Compressed and modified: ", compressedModifiedCount)
 }
