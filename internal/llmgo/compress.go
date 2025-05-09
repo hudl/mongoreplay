@@ -85,10 +85,11 @@ func CompressMessage(p []byte) (o []byte, err error) {
 	bufferSize := int32(mc.getMaxCompressedSize(len(p)-16) +
 		16 + 9) // msg header + compression header
 	c := &compressionHeader{
-		originalOpCode:   getInt32(p, 0),
+		originalOpCode:   getInt32(p, 12),
 		uncompressedSize: int32(len(p) - 16),
 		compressedId:     mc.getId(),
 	}
+
 	o = make([]byte, bufferSize)
 	setInt32(o, 0, bufferSize)
 	setInt32(o, 4, getInt32(p, 4)) // RequestID
@@ -137,10 +138,12 @@ func (noopMessageCompressor) getName() string { return "noop" }
 func (noopMessageCompressor) getMaxCompressedSize(srcLen int) int {
 	return srcLen
 }
+
 func (noopMessageCompressor) compressData(dst, src []byte) (n int, err error) {
 	n = copy(dst, src)
 	return
 }
+
 func (noopMessageCompressor) decompressData(dst, src []byte) (n int, err error) {
 	n = copy(dst, src)
 	return
@@ -153,6 +156,7 @@ func (snappyMessageCompressor) getName() string { return "snappy" }
 func (snappyMessageCompressor) getMaxCompressedSize(srcLen int) int {
 	return snappy.MaxEncodedLen(srcLen)
 }
+
 func (snappyMessageCompressor) compressData(dst, src []byte) (n int, err error) {
 	p := snappy.Encode(dst, src)
 	if len(p) > len(dst) {
@@ -161,6 +165,7 @@ func (snappyMessageCompressor) compressData(dst, src []byte) (n int, err error) 
 	n = len(p)
 	return
 }
+
 func (snappyMessageCompressor) decompressData(dst, src []byte) (n int, err error) {
 	n, err = snappy.DecodedLen(src)
 	if err != nil {
@@ -181,6 +186,7 @@ func (zlibMessageCompressor) getName() string { return "zlib" }
 func (zlibMessageCompressor) getMaxCompressedSize(srcLen int) int {
 	return srcLen
 }
+
 func (zlibMessageCompressor) compressData(dst, src []byte) (n int, err error) {
 	var buf bytes.Buffer
 	wtr := zlib.NewWriter(&buf)
