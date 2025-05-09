@@ -165,7 +165,6 @@ type WriteConcern struct {
 
 	w        int
 	wtimeout int
-	fsync    bool
 	journal  bool
 }
 
