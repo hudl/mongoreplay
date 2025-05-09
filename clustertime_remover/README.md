@@ -5,17 +5,17 @@
 Once built:
 
 ```sh
-$ ./replay_fixer replay_file.bson modified_replay_file.bson
+$ ./clustertime_remover replay_file.bson modified_replay_file.bson
 ```
 
 From source:
 
 ```sh
-$ go run replay_fixer/main.go replay_file.bson modified_replay_file.bson
+$ go run clustertime_remover/main.go replay_file.bson modified_replay_file.bson
 ```
 
 ## Building
 
 ```sh
-$ go build -o replay_fixer replay_fixer/main.go
+$ go build -o clustertime_remover/clustertime_remover clustertime_remover/main.go
 ```
