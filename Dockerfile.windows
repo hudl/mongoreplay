@@ -1,0 +1,26 @@
+# This cross-compiles the MongoReplay tool for Windows (amd64), without SSL/SASL support.
+#
+# gopacket's pcap package loads wpcap.dll dynamically at runtime on Windows
+# (see google/gopacket pcap_windows.go), rather than linking against libpcap
+# via cgo like it does on Linux/macOS. That means no mingw-w64 cross compiler
+# or Npcap SDK is needed to build mongoreplay.exe -- only the Npcap runtime
+# needs to be installed on the Windows machine that eventually runs it.
+
+FROM golang:1.24
+
+WORKDIR /mongoreplay
+COPY . .
+
+ENV GOOS=windows
+ENV GOARCH=amd64
+ENV CGO_ENABLED=0
+ENV GO111MODULE=on
+ENV GOSUMDB=off
+
+RUN mkdir -p bin && \
+    go build -o bin/mongoreplay.exe \
+      -ldflags "-X main.VersionStr=$(git describe --always) -X main.GitCommit=$(git rev-parse HEAD)" \
+      ./main
+
+# Copy the binary out of this container with
+#  docker cp <CONTAINER ID>:/mongoreplay/bin/mongoreplay.exe mongoreplay.exe
