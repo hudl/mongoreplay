@@ -81,6 +81,12 @@ func main() {
 		panic(err)
 	}
 
+	_, err = parser.AddCommand("list-interfaces", "List network interfaces available for capturing traffic", "",
+		&mongoreplay.ListInterfacesCommand{GlobalOpts: &opts})
+	if err != nil {
+		panic(err)
+	}
+
 	_, err = parser.Parse()
 
 	if err != nil {
